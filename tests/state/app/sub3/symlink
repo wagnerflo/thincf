@@ -1,0 +1,4 @@
+%% if "app.mode" in host
+%%   deploy symlink target="../app"
+%%   action app()
+%% endif

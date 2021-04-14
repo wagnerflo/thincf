@@ -1,0 +1,1 @@
+% set mode = argparser.add_mode("diff", help="Compare files below $THINCF_ROOT to last applied state.")

@@ -1,0 +1,16 @@
+{% from "impl/" + env.osname import
+     shell,
+     header,
+     install_csp,
+     load_applied,
+     load_latest,
+   with context -%}
+
+% include "modes/apply"
+% include "modes/diff"
+% include "modes/dry"
+% include "modes/fetch"
+
+% set args = argparser.parse()
+% do header()
+% include "modes/" + args.mode + "." + shell()|trim

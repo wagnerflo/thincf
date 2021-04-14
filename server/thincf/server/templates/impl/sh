@@ -1,0 +1,428 @@
+% set csp_prefix = "csp_"
+
+% macro shell()
+sh
+% endmacro
+
+% macro header()
+set -e
+if ! THINCF_ROOT=$(readlink -fn "${THINCF_ROOT}"); then
+    printf 'Error resolving THINCF_ROOT.\n'
+    exit 1
+fi
+THINCF_ROOT="${THINCF_ROOT%/}/"
+% endmacro
+
+% macro install_csp()
+%   if state
+%     set identifier = state.identifier
+%     set func = csp_prefix + identifier
+%     set statefile = "${THINCF_STATEDIR}/" + identifier
+( umask 577; touch "{{ statefile }}" )
+cat > "{{ statefile }}" <<{% heredoc -%}
+
+{% for user in state.entries|map(attribute="user")|unique|list -%}
+if [ -z "$(resolve_user "{{ user }}")" ]; then
+    printf "Unknown user/uid '%s'\n" {{ user }} >/dev/stderr
+    exit 1
+fi
+{% endfor -%}
+
+{% for group in state.entries|map(attribute="group")|unique|list -%}
+if [ -z "$(resolve_group "{{ group }}")" ]; then
+    printf "Unknown group/gid '%s'\n" {{ group }} >/dev/stderr
+    exit 1
+fi
+{% endfor -%}
+
+{{ func }} () {
+    case $1 in
+        identifier)
+            printf %b {{ identifier }}
+            ;;
+        list)
+            cat <<{% heredoc -%}
+{% for entry in state.entries -%}
+{{ entry.path|octescape }}
+{% endfor -%}
+{% endheredoc %}            ;;
+        user)
+            case $2 in
+                {%- for entry in state.entries %}
+                '{{ entry.path|octescape }}') resolve_user {{ entry.user|shquote }} ;;
+                {%- endfor %}
+            esac
+            ;;
+        group)
+            case $2 in
+                {%- for entry in state.entries %}
+                '{{ entry.path|octescape }}') resolve_group {{ entry.group|shquote }} ;;
+                {%- endfor %}
+            esac
+            ;;
+        mode)
+            case $2 in
+                {%- for entry in state.entries %}
+                '{{ entry.path|octescape }}') printf {{ '%04o'|format(entry.mode) }} ;;
+                {%- endfor %}
+            esac
+            ;;
+        type)
+            case $2 in
+                {%- for entry in state.entries %}
+                '{{ entry.path|octescape }}') printf {{ entry.type }} ;;
+                {%- endfor %}
+            esac
+            ;;
+        actions)
+            case $2 in
+                {%- for entry in state.entries if entry.actions %}
+                '{{ entry.path|octescape }}') printf '%s '
+                    {%- for invoc in entry.actions %}
+                    {%- set action = state.actions[invoc.name] -%}
+                    {{ ' ' }}{{ action.index }}_{{ action.args[invoc.arguments] }}
+                    {%- endfor %} ;;
+                {%- endfor %}
+            esac
+            ;;
+        cat)
+            case $2 in
+                {%- for entry in state.entries if entry.type == 'file' %}
+                '{{ entry.path|octescape }}') cat <<
+                    {%- heredoc %}{{ entry.content }}{% endheredoc -%}
+                    ;;
+                {%- endfor %}
+            esac
+            ;;
+        target)
+            case $2 in
+                {%- for entry in state.entries if entry.type == 'symlink' %}
+                '{{ entry.path|octescape }}') printf '{{ entry.content|octescape }}' ;;
+                {%- endfor %}
+            esac
+            ;;
+        run)
+            action=$2
+            mode=$3
+            shift 3
+            case ${action} in
+                {%- for entry in state.actions.values() %}
+                {%- for args,idx in entry.args.items() %}
+                {{ entry.index }}_{{ idx }}) set -- "${mode}" {{ args|map('shquote')|join(' ') }} "$@" ;;
+                {%- endfor %}
+                {%- endfor %}
+            esac
+            case ${action} in
+                {%- for entry in state.actions.values() %}
+                {{ entry.index }}_*) run_action "$@" <<
+                        {%- heredoc %}{{ entry.action.content }}{% endheredoc -%}
+                        ;;
+                {%- endfor %}
+            esac
+            ;;
+    esac
+}
+{% endheredoc -%}
+chmod 400 "{{ statefile }}"
+{% endif -%}
+% endmacro
+
+% macro load_applied()
+%   require csp_functions
+unset applied
+if [ -L "${THINCF_STATEDIR}/applied" ]; then
+  . "${THINCF_STATEDIR}/applied"
+  applied={{ csp_prefix }}$(basename "$(readlink -fn "${THINCF_STATEDIR}/applied")")
+fi
+% endmacro
+
+% macro load_latest()
+%   require csp_functions
+latest=$(ls -tc "${THINCF_STATEDIR}" | grep -Ex '[0-9a-f]{40}' | head -n 1)
+if [ -n "${latest}" ]; then
+  . "${THINCF_STATEDIR}/${latest}"
+  latest={{ csp_prefix }}${latest}
+else
+  unset latest
+fi
+% endmacro
+
+% declare link_latest
+link_latest () {
+  ln -sf ${latest#{{ csp_prefix }}} "${THINCF_STATEDIR}/applied"
+}
+% enddeclare
+
+% declare max
+max () {
+  local m
+  m=0
+  for i in "$@"; do
+    [ ${i} -gt ${m} ] && m=${i}
+  done
+  printf '%u' ${m}
+}
+% enddeclare
+
+% declare split_str
+split_str () {
+    local noglob ifs var names IFS
+    noglob=$(set -o | grep -qx 'noglob *on' && printf 1 || true)
+    [ -z "${noglob}" ] && set -f
+    var="$1"
+    ifs="$2"
+    shift 2
+    names="$@"
+    IFS="${ifs}"
+    set -- $var
+    unset IFS
+    for name in ${names}; do
+        setvar "${name}" "$1"
+        shift
+    done
+    [ -z "${noglob}" ] && set +f
+}
+% enddeclare
+
+% declare is_protected
+is_protected () {
+    {% for path in proteced_files -%}
+    [ "$1" = "{{ path|octescape }}" ] && return 0
+    {% endfor -%}
+    return 1
+}
+% enddeclare
+
+% declare for_files
+%   require stat_functions
+%   require split_str
+for_files () {
+    local csp
+    local octfile csp_type csp_mode csp_user csp_group csp_target
+    local file file_type file_mode file_user file_group file_target
+    local file_diff_del file_diff_ins
+    csp=$1
+    shift
+    for octfile in $(${csp} list); do
+        csp_type=$(${csp} type ${octfile})
+        csp_mode=$(${csp} mode ${octfile})
+        csp_user=$(${csp} user ${octfile})
+        csp_group=$(${csp} group ${octfile})
+        csp_target=$(${csp} target ${octfile})
+        csp_actions=$(${csp} actions ${octfile})
+        file="${THINCF_ROOT}$(printf ${octfile})"
+        file_type=$(stat_type "${file}")
+        file_mode=$(stat_mode "${file}")
+        file_user=$(stat_user "${file}")
+        file_group=$(stat_group "${file}")
+        file_target=$(stat_target "${file}")
+        file_diff_del=0
+        file_diff_ins=0
+        if [ "${csp_type}" = "file" ]; then
+            case "${file_type}" in
+                file)
+                    split_str "$(${csp} cat ${octfile} | stat_diff "${file}" -)" , \
+                              file_diff_del file_diff_ins
+                    ;;
+                missing)
+                    split_str "$(${csp} cat ${octfile} | stat_diff /dev/null -)" , \
+                              file_diff_del file_diff_ins
+            esac
+        fi
+        "$@"
+    done
+}
+% enddeclare
+
+% declare list_contains
+list_contains () {
+    local word=$1
+    shift
+    for item in $@; do
+        [ "${word}" = "${item}" ] && return 0
+    done
+    return 1
+}
+% enddeclare
+
+% declare run_with_files
+run_with_files () {
+    local mode=$1
+    shift
+    local files=$@
+    set -- ${mode}
+    for octfile in ${files}; do
+        set -- "$@" "${THINCF_ROOT}$(printf ${octfile})"
+    done
+    ${latest} run ${action} "$@"
+}
+% enddeclare
+
+% declare do_find
+_find () {
+    local l
+    l=$#
+    set -- "$@" "--"
+    while [ "$1" != "--" ]; do
+        set -- "$@" "$1"
+        shift
+    done
+    shift
+    while [ -n "$1" -a "$1" != "--" ]; do
+        shift
+    done
+    [ $# -eq 0 -o $l -le $# ] && return
+    shift
+    find "$@" -exec sh -c \
+         'for i in "$@"; do
+              printf %s "$i" | hexdump -ve "/1 \"\\\\%03o\""
+              printf " "
+          done' sh {} +
+}
+
+do_find () {
+    local shifted file
+    shifted=0
+    for file in $(_find "$@"); do
+        if [ ${shifted} -eq 0 ]; then
+            while [ "$1" != "--" ]; do
+                shift
+            done
+            shift
+            shifted=1
+        fi
+        "$@" "$(printf ${file})"
+    done
+}
+% enddeclare
+
+% declare show_diff
+%   require stat_functions
+%   require do_find
+%   require max
+%   require tty_colors
+_diff_header () {
+    {% raw -%}
+    lu=$(max ${#3} ${#7})
+    lg=$(max ${#4} ${#8})
+    printf "${Cbo}"
+    for prefix in "---" "+++"; do
+        if [ "$1" = "/dev/null" ]; then
+            printf -- "%s %s\n" "${prefix}" "$1"
+        else
+            printf -- "%s %s # %s # %-${lu}s:%-${lg}s\n" "${prefix}" "$1" "$2" "$3" "$4"
+        fi
+        shift 4
+    done
+    printf "${Cre}"
+    {% endraw -%}
+}
+
+_diff_symlink () {
+    [ -n "$1" ] && printf -- "${Crd}-symlink target: %s${Cre}\n" "$1" || true
+    [ -n "$2" ] && printf -- "${Cgr}+symlink target: %s${Cre}\n" "$2" || true
+}
+
+_diff_body () {
+    case "${1}:${3}" in
+        -file:-file) diff -pu "${2}" "${4}" ;;
+        -file:-csp)  ${csp} cat ${octfile} | diff -pu "${2}" - ;;
+        -csp:-file)  ${csp} cat ${octfile} | diff -pu - "${4}" ;;
+    esac | {
+        read _; read _
+        sed -e "s/^+/${Cgr}+/" -e "s/^-/${Crd}-/" \
+            -e "s/^@@/${Ccy}@@/" -e "s/$/${Cre}/"
+    } || true
+}
+
+_show_compare () {
+    _diff_header \
+        "${file}" "${src_mode}" "${src_user}" "${src_group}" \
+        "${file}" "${dst_mode}" "${dst_user}" "${dst_group}"
+    case "${dst_type}" in
+        file)    _diff_body -${src} "${file}" -${dst} "${file}" ;;
+        symlink) _diff_symlink "${src_target}" "${dst_target}" ;;
+    esac
+    printf "\n"
+}
+
+_show_delete_stat () {
+    _diff_header \
+        "$1" $(stat_mode "$1") $(stat_user "$1") $(stat_group "$1") \
+        /dev/null "" "" ""
+    case "$(stat_type "$1")" in
+        file)    _diff_body -file "$1" -file /dev/null ;;
+        symlink) _diff_symlink "$(stat_target "$1")" "" ;;
+    esac
+    printf "\n"
+}
+
+_show_delete_src () {
+    _diff_header \
+        "${file}" "${src_mode}" "${src_user}" "${src_group}" \
+        /dev/null "" "" ""
+    case "${src_type}" in
+        file)    _diff_body -${src} "${file}" -file /dev/null ;;
+        symlink) _diff_symlink "${src_target}" "" ;;
+    esac
+    printf "\n"
+}
+
+_show_create_stat () {
+    _diff_header \
+        /dev/null "" "" "" \
+        "$1" $(stat_mode "$1") $(stat_user "$1") $(stat_group "$1")
+    case "$(stat_type "$1")" in
+        file)    _diff_body -file /dev/null -file "$1" ;;
+        symlink) _diff_symlink "" "$(stat_target "$1")" ;;
+    esac
+    printf "\n"
+}
+
+_show_create_dst () {
+    _diff_header \
+        /dev/null "" "" "" \
+        "${file}" "${dst_mode}" "${dst_user}" "${dst_group}"
+    case "${dst_type}" in
+        file)    _diff_body -file /dev/null -${dst} "${file}" ;;
+        symlink) _diff_symlink "" "${dst_target}" ;;
+    esac
+    printf "\n"
+}
+
+show_diff () {
+    local src=$1
+    local dst=$2
+
+    for suffix in user group mode type target; do
+        eval local src_${suffix}=\${${src}_${suffix}}
+        eval local dst_${suffix}=\${${dst}_${suffix}}
+    done
+
+    if [ "${src_type}" != "${dst_type}" ]; then
+        case "${src}:${dst}" in
+            file:csp)
+                if [ "${src_type}" != "missing" ]; then
+                    do_find "${file}" -- _show_delete_stat
+                fi
+                _show_create_dst
+                ;;
+            csp:file)
+                _show_delete_src
+                if [ "${dst_type}" != "missing" ]; then
+                    do_find "${file}" -- _show_create_stat
+                fi
+                ;;
+        esac
+    elif [ "${src_mode}" = "${dst_mode}" -a \
+           "${src_user}" = "${dst_user}" -a \
+           "${src_group}" = "${dst_group}" -a \
+           "${src_target}" = "${dst_target}" -a \
+           ${file_diff_del} -eq 0 -a \
+           ${file_diff_ins} -eq 0 ]; then
+        # entry unchanged
+    else
+        _show_compare
+    fi
+}
+% enddeclare

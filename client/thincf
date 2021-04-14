@@ -1,0 +1,138 @@
+#!/bin/sh
+set -e
+
+err () {
+    local ex=$1
+    local str=$2
+    shift 2
+    printf "${str}\n" "$@" >/dev/stderr
+    exit ${ex}
+}
+
+prefix=$(realpath "$(dirname "$(realpath "${0}")")/..")
+envfile=${THINCF_ENVFILE:-${prefix}/etc/thincf.env}
+
+# source environment file
+[ -f "${envfile}" ] && . "${envfile}"
+
+# required variables
+for var in THINCF_CA THINCF_CERT THINCF_KEY THINCF_URL; do
+    eval val=\"\$${var}\"
+    if [ -z "${val}" ]; then
+        err 22 "required environment variable empty: %s" "${var}"
+    fi
+done
+
+# certificates
+for file in "${THINCF_CA}" "${THINCF_CERT}" "${THINCF_KEY}"; do
+    if [ ! -f "${file}" ]; then
+        err 2 "no such file: %s" "${file}"
+    fi
+
+    if [ ! -r "${file}" ]; then
+        err 13 "permission denied: %s" "${file}"
+    fi
+done
+
+# directories
+root=${THINCF_ROOT:-/}
+vdir=${THINCF_VAR:-${root%/}/var/db/thincf/client}
+sdir=${THINCF_STATEDIR:-${vdir%/}/states}
+bdir=${THINCF_BACKUPDIR:-${vdir%/}/backups}
+
+for dir in "${root}" "${sdir}" "${bdir}"; do
+    if [ ! -d "${dir}" ]; then
+        err 2 "no such directory: %s" "${dir}"
+    fi
+
+    if [ ! -r "${dir}" ] || [ ! -w "${dir}" ] || [ ! -x "${dir}" ]; then
+        err 13 "permission denied: %s" "${sdir}"
+    fi
+done
+
+# print only mode?
+if [ -n "${THINCF_PRINT}" ]; then
+    cmd="cat"
+else
+    cmd="/bin/sh -s"
+fi
+
+# make sure path is reasonable
+contains_word () {
+    local IFS=$3
+    for word in $1; do
+        [ "${word}" = "$2" ] && return
+    done
+    return 1
+}
+
+for dir in /sbin /bin /usr/sbin /usr/bin; do
+    if ! contains_word "${PATH}" "${dir}" ":"; then
+        path="${PATH}:${dir}"
+    fi
+done
+
+urlencode () {
+    printf '%s' "${1}" | hexdump -v -e '/1 "%02x"' | sed 's/\(..\)/%\1/g'
+}
+
+envheader () {
+    printf 'thincf-env-%s: %s\n' "${1}" $(urlencode "${2}")
+}
+
+parse_response () {
+    local line http code rest cr
+
+    # prepare a variable with carriage return in it
+    cr="$(printf '\rq')"
+    cr=${cr%q}
+
+    # read status line
+    read http code rest
+
+    # curl error
+    if [ "${http}" = "curl:" ]; then
+        printf '%s %s %s\n' "${http}" "${code}" "${rest}" >/dev/stderr
+        cat - >/dev/stderr
+        exit 1
+    fi
+
+    # skip headers
+    while read line; do
+        [ "${line}" = "${cr}" ] && break
+    done
+
+    # server error
+    if [ ${code} -ne 200 ]; then
+        cat - >/dev/stderr
+        printf '\n' >/dev/stderr
+
+    # success
+    else
+        /usr/bin/env \
+            -u THINCF_CA -u THINCF_CERT -u THINCF_KEY \
+            -u THINCF_URL -u THINCF_PRINT \
+            THINCF_ROOT="${root}" \
+            THINCF_STATEDIR="${sdir}" \
+            THINCF_BACKUPDIR="${bdir}" \
+            ${cmd}
+    fi
+}
+
+(
+    for arg in "$0" "$@"; do
+        printf 'thincf-args: %s\n' $(urlencode "${arg}")
+    done
+    find "${sdir}" -maxdepth 1 -type f \
+     -name $(printf '%*s' 40 | sed 's/ /[0-9a-f]/g') \
+     -exec basename {} \; | sed 's/^/thincf-states: /'
+    envheader osname $(uname -s)
+    envheader osrelease $(uname -r)
+) | curl \
+     --cacert "${THINCF_CA}" \
+     --cert "${THINCF_CERT}" \
+     --key "${THINCF_KEY}" \
+     -H @- \
+     -o - -i --silent --show-error \
+     "${THINCF_URL}" 2>&1 | \
+    parse_response

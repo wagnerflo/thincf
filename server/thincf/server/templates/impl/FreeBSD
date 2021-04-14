@@ -1,0 +1,140 @@
+% extends "impl/sh"
+
+% declare tty_colors
+if [ -t 1 ]; then
+    if [ $(tput colors) -ge 8 ]; then
+        Cre="$(tput me)"
+        Cbo="$(tput md)"
+        Crd="$(tput AF 1)"
+        Cgr="$(tput AF 2)"
+        Ccy="$(tput AF 6)"
+    fi
+fi
+% enddeclare
+
+% declare stat_functions
+stat_diff () {
+    diff -u "$1" "$2" | \
+        awk 'BEGIN { d=0; i=0 }
+             NR<3 { next }
+             /^-/ { d+=1 }
+             /^\+/ { i+=1 }
+             END { print(d "," i) }'
+}
+
+stat_user () {
+    stat -nqf %Su "$1" || true
+}
+
+stat_group () {
+    stat -nqf %Sg "$1" || true
+}
+
+stat_mode () {
+    stat -nqf %Mp%Lp "$1" || true
+}
+
+stat_type () {
+    case "$(stat -nqf %Hp "$1")" in
+        4)  printf 'dir' ;;
+        10) printf 'file' ;;
+        12) printf 'symlink' ;;
+        '') printf 'missing' ;;
+        *)  printf 'other' ;;
+    esac
+}
+
+stat_target () {
+    stat -nqf %Y "$1" || true
+}
+% enddeclare
+
+% declare csp_functions
+resolve_user () {
+    getent passwd $1 | cut -d: -f1
+}
+
+resolve_group () {
+    getent group $1 | cut -d: -f1
+}
+
+run_action () {
+    local ex=0
+    local script=$(mktemp)
+    cat - > "${script}"
+    chmod +x "${script}"
+    "${script}" "$@" || ex=$?
+    rm "${script}"
+    return ${ex}
+}
+% enddeclare
+
+% set proteced_files = [
+    ".",
+    "bin",
+    "boot",
+    "etc",
+    "lib",
+    "libexec",
+    "sbin",
+    "usr",
+    "usr/bin",
+    "usr/lib",
+    "usr/libexec",
+    "usr/local",
+    "usr/local/bin",
+    "usr/local/etc",
+    "usr/local/lib",
+    "usr/local/libexec",
+    "usr/local/sbin",
+    "usr/sbin",
+    "var",
+    "var/db",
+    "var/log",
+    "var/run",
+  ]
+
+% declare apply_functions
+delete_path () {
+    rm -rf "$1"
+}
+
+write_contents () {
+    cat > "$1"
+}
+
+create_directory () {
+    mkdir "$1"
+}
+
+create_symlink () {
+    ln -sf "$2" "$1"
+}
+
+set_mode () {
+    chmod -h "$2" "$1"
+}
+
+set_user () {
+    chown -h "$2" "$1"
+}
+
+set_group () {
+    chown -h ":$2" "$1"
+}
+% enddeclare
+
+% declare iso8601
+make_iso8601 () {
+    printf $(date -Iseconds ${1:+-r} $1)
+}
+
+parse_iso8601 () {
+    printf $((
+        $(date -juf%FT%T $(printf "$1" | cut -c -19) +%s) -
+        $(printf "$1" | cut -c 20)
+        $(printf "$1" | cut -c 21-22) * 3600 +
+        $(printf "$1" | cut -c 24-25) * 60
+    ))
+}
+% enddeclare

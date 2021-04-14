@@ -1,0 +1,8 @@
+.pyenv/*
+!.pyenv/.keep
+__pycache__/
+tests/certs/*.crt
+tests/certs/*.key
+tests/certs/*.srl
+tests/server/
+tests/root/

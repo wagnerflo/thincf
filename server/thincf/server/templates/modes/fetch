@@ -1,0 +1,1 @@
+% set mode = argparser.add_mode("fetch", help="Download latest state from server.")

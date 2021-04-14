@@ -1,0 +1,17 @@
+%% define action app
+#!/bin/sh
+set -e
+
+case "$1" in
+    prepare)
+        shift 1
+        echo prepare $@
+        ;;
+    check)
+        ;;
+    apply)
+        exit $(jot -r 1 0 1)
+        ;;
+    verify)
+        ;;
+esac

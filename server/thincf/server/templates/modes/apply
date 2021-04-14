@@ -1,0 +1,4 @@
+% set mode = argparser.add_mode("apply", help="Modify files below $THINCF_ROOT to equal contents of latest state.")
+% do mode.add_option("-F", "--fetch", is_flag=True)
+% do mode.add_option("-o", "--overwrite", is_flag=True)
+% do mode.add_option("-u", "--unsafe", is_flag=True)

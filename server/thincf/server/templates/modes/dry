@@ -1,0 +1,2 @@
+% set mode = argparser.add_mode("dry", help="Show what actions 'modify' subcommand would take.")
+% do mode.add_option("-F", "--fetch", is_flag=True)
