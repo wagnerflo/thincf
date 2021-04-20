@@ -108,7 +108,7 @@ fi
             case ${action} in
                 {%- for entry in state.actions.values() %}
                 {%- for args,idx in entry.args.items() %}
-                {{ entry.index }}_{{ idx }}) set -- "${mode}" {{ args|map('shquote')|join(' ') }} "$@" ;;
+                {{ entry.index }}_{{ idx }}) set -- "${mode}" {{ args|map('shquote')|join(' ') }} -- "$@" ;;
                 {%- endfor %}
                 {%- endfor %}
             esac
