@@ -68,6 +68,7 @@ class State:
             actions = set(),
         )
         content = template.render(
+            hosts = list(self.hosts.values()),
             host = host,
             env = env,
             metadata = metadata,
