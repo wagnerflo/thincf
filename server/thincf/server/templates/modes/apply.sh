@@ -163,22 +163,23 @@ if [ ${found_modified} -ne 0 -o ${found_protected} -ne 0 ]; then
     exit 1
 fi
 
-## run prepare actions
-prepare=""
+## collect all actions
+all_actions=""
 
-collect_prepare () {
+collect_all_actions () {
     for action in ${csp_actions}; do
-        if ! list_contains ${action} ${prepare}; then
-            prepare="${prepare} ${action}"
+        if ! list_contains ${action} ${all_actions}; then
+            all_actions="${all_actions} ${action}"
         fi
-        eval prepare_${action}_files=\"\${prepare_${action}_files} ${octfile}\"
+        eval action_files_${action}=\"\${action_files_${action}} ${octfile}\"
     done
 }
 
-for_files ${latest} collect_prepare
+for_files ${latest} collect_all_actions
 
-for action in ${prepare}; do
-    eval run_with_files prepare \${prepare_${action}_files}
+## run prepare actions
+for action in ${all_actions}; do
+    eval run_with_files prepare \${action_files_${action}}
 done
 
 ## apply all changes
@@ -298,13 +299,8 @@ run_actions () {
     done
 }
 
-if [ -z "${actions}" ]; then
-    link_latest
-else
-    printf 'Running actions...\n'
-    if run_actions; then
-        link_latest
-    else
+if [ -n "${actions}" ]; then
+    if ! run_actions; then
         ## running one of the actions failed: roll back the changes
         printf 'Error in action; rolling back.\n'
         if [ -e "${bfile}" ]; then
@@ -317,5 +313,18 @@ else
             eval run_with_files apply \${action_${action}_files} || \
                 true
         done
+
+        ## note failure
+        rollback=true
     fi
+fi
+
+## run follow up actions
+for action in ${all_actions}; do
+    eval run_with_files followup \${action_files_${action}}
+done
+
+## mark state as applied
+if [ -z "${rollback}" ]; then
+    link_latest
 fi
