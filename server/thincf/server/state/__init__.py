@@ -23,6 +23,7 @@ class State:
         self.jinja_files = Environment(
             loader = FunctionLoader(self.load_template),
             extensions = (
+                "jinja2.ext.do",
                 StateMetadataExtension,
                 StateMarkupExtension,
             ),
