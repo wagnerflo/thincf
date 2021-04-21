@@ -16,16 +16,20 @@ class Host:
         self.name = name
         self.config = config
 
-    def __contains__(self, item):
-        return item in self.config
+    def __contains__(self, pattern):
+        try:
+            next(self.find(pattern, only_values=True))
+            return True
+        except StopIteration:
+            return False
 
-    def __getitem__(self, item):
-        return self.config[item]
+    def __getitem__(self, pattern):
+        try:
+            return next(self.find(pattern, only_values=True))
+        except StopIteration:
+            raise KeyError(pattern)
 
-    def getlist(self, item):
-        return self.config.getlist(item)
-
-    def find(self, pattern):
+    def find(self, pattern, only_values=False):
         pat = r'^'
         idx = 0
         for match in self.PATTERN.finditer(pattern):
@@ -38,14 +42,14 @@ class Host:
             if (m := pat.match(key)) is None:
                 continue
 
-            try:
-                wildcard = m.group(1)
-            except IndexError:
-                wildcard = None
-            yield (
-                FindKey(m.group(0), wildcard),
-                value
-            )
+            if only_values:
+                yield value
+            else:
+                try:
+                    wildcard = m.group(1)
+                except IndexError:
+                    wildcard = None
+                yield ( FindKey(m.group(0), wildcard), value )
 
 class Hosts(dict):
     @classmethod
