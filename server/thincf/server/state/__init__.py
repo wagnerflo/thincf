@@ -11,6 +11,27 @@ from .dirs import Directories
 from .files import *
 from .hosts import Hosts
 
+class StateEnvironment(Environment):
+    def __init__(self, loader_function):
+        super().__init__(
+            loader = FunctionLoader(loader_function),
+            extensions = (
+                "jinja2.ext.do",
+                StateMetadataExtension,
+                StateMarkupExtension,
+            ),
+            line_statement_prefix = '%%',
+        )
+
+    def join_path(self, template, parent):
+        if template.startswith("./") or template.startswith("../"):
+            return str(
+                (Path(parent).parent / template)
+                    .resolve()
+                    .relative_to("/")
+            )
+        return template
+
 class State:
     person_client = b'thincf.cl.state'
 
@@ -20,15 +41,7 @@ class State:
         self.dirs = dirs
         self.files = files
         self.actions = actions
-        self.jinja_files = Environment(
-            loader = FunctionLoader(self.load_template),
-            extensions = (
-                "jinja2.ext.do",
-                StateMetadataExtension,
-                StateMarkupExtension,
-            ),
-            line_statement_prefix = '%%',
-        )
+        self.jinja_files = StateEnvironment(self.load_template)
 
     @classmethod
     async def from_iterator(cls, identifier, iterator):
